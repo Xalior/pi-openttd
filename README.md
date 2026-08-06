@@ -81,29 +81,6 @@ about the code.
 - **Long runs.** OpenTTD is a program people leave running for hours. Nothing
   here has run for more than the length of a build.
 
-## What you need to supply
-
-**No game data is included in this repository and none is downloaded by the
-build.** OpenTTD needs a graphics set, and wants a sound set and a music set.
-Two families exist:
-
-- **The free ones**, which are what this port is meant to be used with:
-  **OpenGFX** (graphics), **OpenSFX** (sounds) and **OpenMSX** (music). They
-  are published by the OpenTTD project at
-  [cdn.openttd.org](https://cdn.openttd.org/) and are freely
-  redistributable. OpenGFX and OpenMSX are GPL v2; OpenSFX is
-  CC BY-SA 3.0.
-- **The original Transport Tycoon Deluxe data files**, if you own a copy.
-  OpenTTD reads them directly. They are not free and are not distributed by
-  anyone.
-
-Each set is downloaded as a `.zip` containing a `.tar`. Put the `.tar` files,
-unchanged, in `games/openttd/baseset/` on the card, beside the files
-`make card` already puts there. OpenTTD reads a `.tar` directly and does not
-need it unpacked.
-
-The music set can be left out entirely — see "No music" above.
-
 ## Building
 
 You need:
@@ -144,18 +121,74 @@ The C++ standard used is C++23, not the C++20 upstream asks for. The reason
 is the standard library, not the game: the libc++ in these worlds uses a
 C++23 construct in its own headers, and GCC rejects it at C++20.
 
+## Game data, and `make media`
+
+**This repository ships no game data, and `make card` never downloads
+anything.** OpenTTD needs a graphics set to start at all, and wants a sound
+set and a music set.
+
+Two directories, and the difference between them matters:
+
+| | |
+|---|---|
+| `media/` | Where game data lives on your machine. `make media` downloads into it; you copy your own files into it by hand. It is never committed and never shipped. |
+| `build/sd-card/` | What `make card` stages. It copies from `media/` and fetches nothing. |
+
+`make card` works whether or not `media/` has anything in it. A card built
+with no data is a real card — it just says plainly which files are missing.
+
+### `make media` — what it downloads
+
+    make media
+
+It downloads three files, with `curl`, all published by the OpenTTD project
+at [cdn.openttd.org](https://cdn.openttd.org/):
+
+- **OpenGFX**, the free graphics set — `opengfx-8.0.tar`. OpenTTD refuses to
+  start without a graphics set, and this is it.
+  `https://cdn.openttd.org/opengfx-releases/8.0/opengfx-8.0-all.zip`.
+  Licence: GNU GPL v2.
+- **OpenSFX**, the free sound effects set — `opensfx-1.0.3.tar`. The game
+  starts without it; it just plays no sound effects.
+  `https://cdn.openttd.org/opensfx-releases/1.0.3/opensfx-1.0.3-all.zip`.
+  Licence: Creative Commons Attribution-ShareAlike 3.0 Unported.
+- **OpenMSX**, the free music set — `openmsx-0.4.2.tar`. The game starts
+  without it; it just plays no music, and this port's own music backend is
+  disabled regardless — see "No music" above.
+  `https://cdn.openttd.org/openmsx-releases/0.4.2/openmsx-0.4.2-all.zip`.
+  Licence: GNU GPL v2.
+
+Each set is published as a `.zip` holding one `.tar`. The zip is checked
+against the SHA256 published in the release's own `manifest.yaml` on the
+same host, then unpacked — OpenTTD reads a `.tar` directly and does not need
+it extracted further, so the `.tar` lands in `media/` exactly as unpacked,
+checked again against the SHA256 this project computed from it. A
+`provenance.txt` is written beside them recording the URLs, the date, the
+licences and both sets of checksums. Running it again re-verifies what is
+already there instead of downloading it a second time.
+
+### What `make media` will not fetch
+
+**The original Transport Tycoon Deluxe data files**, if you own a copy.
+OpenTTD reads them directly. They are a commercial product and are not
+distributed by anyone, so nothing here goes looking for them — copy them by
+hand, unchanged, into `games/openttd/baseset/` on the staged card, beside the
+files `make card` already puts there.
+
 ## Putting it on a card
 
     make card
 
 stages everything into `build/sd-card/`. Copy the contents to a FAT32 card,
-then add two things the build cannot provide:
+then add the one thing the build cannot provide:
 
-1. **The Raspberry Pi firmware files** — `bootcode.bin`, `start*.elf`,
-   `fixup*.dat` and, for the Pi 4, `armstub8-rpi4.bin` — at the root of the
-   card. They come from the
-   [Raspberry Pi firmware repository](https://github.com/raspberrypi/firmware).
-2. **The base sets**, in `games/openttd/baseset/`, as described above.
+- **The Raspberry Pi firmware files** — `bootcode.bin`, `start*.elf`,
+  `fixup*.dat` and, for the Pi 4, `armstub8-rpi4.bin` — at the root of the
+  card. They come from the
+  [Raspberry Pi firmware repository](https://github.com/raspberrypi/firmware).
+
+If `make media` was not run first, `games/openttd/baseset/` is missing the
+graphics, sound and music sets, and `make card` says so plainly.
 
 The card ends up looking like this:
 

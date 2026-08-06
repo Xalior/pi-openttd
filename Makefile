@@ -14,10 +14,13 @@
 #   make rpi5 | rpi4 | rpi3  one board's kernel image
 #   make kernels             all three, built in parallel
 #   make verify              truth-gate: every image exists and is non-empty
+#   make media               download the freely redistributable base sets
+#                            into media/
 #   make netboot             stage the Pi 5 image and its boot configuration
 #                            into build/netboot-rpi5/
-#   make card                stage the whole card, except the base set data,
-#                            into build/sd-card/
+#   make card                stage the whole card into build/sd-card/, copying
+#                            in whatever media/ holds and naming what it does
+#                            not. It never downloads anything
 #   make clean-boards        drop every board's build tree
 #
 # The three boards never share mutable state: each has its own circle-stdlib
@@ -59,7 +62,7 @@ IMAGE_rpi5 = kernel_2712.img
 GEN_DIR    = $(CURDIR)/build/gen
 GEN_STAMP  = $(GEN_DIR)/generated/table/strings.h
 
-.PHONY: deps generated kernels verify netboot card clean-boards $(BOARDS)
+.PHONY: deps generated kernels verify media netboot card clean-boards $(BOARDS)
 .PHONY: $(addprefix deps-,$(BOARDS))
 
 deps:
@@ -147,6 +150,149 @@ verify:
 	done; \
 	exit $$fail
 
+# ---------------------------------------------------------------------------
+# Game data
+# ---------------------------------------------------------------------------
+#
+#   media/           what `make media` downloads. Gitignored, never shipped,
+#                    and never part of a build.
+#   build/sd-card/   what `make card` stages. It copies from media/ and
+#                    fetches nothing.
+#
+# `card` does not depend on `media`, so a card built without it is complete
+# except for the data and names the files that are absent.
+#
+# `make media` fetches the three free base sets published by the OpenTTD
+# project at cdn.openttd.org: OpenGFX (graphics, required), OpenSFX (sound
+# effects) and OpenMSX (music). The original Transport Tycoon Deluxe data
+# files are a commercial product and are never fetched — a copy is supplied
+# by hand, as the README describes.
+#
+# Each set is published as a .zip holding exactly one file, a .tar OpenTTD
+# reads directly without unpacking further. The zip is downloaded, checked
+# against the SHA256 published in the release's own manifest.yaml on the
+# same host, and unpacked; the .tar that lands in media/ is then checked
+# against the SHA256 this project computed from that extraction, since
+# nothing publishes a checksum for the unpacked file on its own. Re-running
+# re-verifies the .tar already in media/ rather than re-downloading.
+MEDIA_DIR = media
+
+OPENGFX_URL        = https://cdn.openttd.org/opengfx-releases/8.0/opengfx-8.0-all.zip
+OPENGFX_ZIP_SHA256 = 43a0c1dabf39cb865394f3a6cc36d4da5c10ecfaaf55652043104806810903be
+OPENGFX_TAR_SHA256 = 9389bcb0807058c80bd95121e978f05d9ef86b4b1bc3ac2da8da8bb02456043c
+
+OPENSFX_URL        = https://cdn.openttd.org/opensfx-releases/1.0.3/opensfx-1.0.3-all.zip
+OPENSFX_ZIP_SHA256 = e0a218b7dd9438e701503b0f84c25a97c1c11b7c2f025323fb19d6db16ef3759
+OPENSFX_TAR_SHA256 = 531a243c5f0742e34d53704263302bbb847a3dc1e618831097ee940088b7b879
+
+OPENMSX_URL        = https://cdn.openttd.org/openmsx-releases/0.4.2/openmsx-0.4.2-all.zip
+OPENMSX_ZIP_SHA256 = 5a4277a2e62d87f2952ea5020dc20fb2f6ffafdccf9913fbf35ad45ee30ec762
+OPENMSX_TAR_SHA256 = d8c8062d1c1cc7df2a89e7ce3bdaceab58d966a86142b09c788aa38940223191
+
+# sha256sum on Linux, shasum on macOS. Whichever exists; if neither does, the
+# target stops rather than accepting a download it cannot check.
+SHA256SUM := $(firstword $(shell command -v sha256sum 2>/dev/null) \
+                         $(shell command -v shasum 2>/dev/null))
+
+media:
+	@if [ -z "$(SHA256SUM)" ]; then \
+		echo "  MEDIA no sha256sum or shasum on this machine — refusing to"; \
+		echo "        download something that cannot be verified."; \
+		exit 1; \
+	fi
+	@command -v unzip >/dev/null 2>&1 || { \
+		echo "  MEDIA no unzip on this machine — refusing to unpack a"; \
+		echo "        download that cannot then be verified."; \
+		exit 1; \
+	}
+	@mkdir -p $(MEDIA_DIR)
+	@fetch_baseset() { \
+		name="$$1"; url="$$2"; zipsha="$$3"; tarsha="$$4"; \
+		tar_path="$(MEDIA_DIR)/$$name.tar"; \
+		zip_path="$(MEDIA_DIR)/$$name-all.zip"; \
+		if [ -f "$$tar_path" ]; then \
+			echo "  MEDIA $$tar_path already here — verifying"; \
+		else \
+			echo "  MEDIA fetching $$url"; \
+			curl -fL --retry 3 -o "$$zip_path.part" "$$url" || { \
+				rm -f "$$zip_path.part"; \
+				echo "  MEDIA download failed for $$url"; return 1; }; \
+			mv "$$zip_path.part" "$$zip_path"; \
+			got=`$(SHA256SUM) -a 256 "$$zip_path" 2>/dev/null || $(SHA256SUM) "$$zip_path"`; \
+			got=`echo "$$got" | awk '{print $$1}'`; \
+			if [ "$$got" != "$$zipsha" ]; then \
+				echo "  MEDIA SHA256 MISMATCH for $$zip_path"; \
+				echo "        expected $$zipsha"; \
+				echo "        got      $$got"; \
+				echo "        the file has been left in place for inspection, and is"; \
+				echo "        NOT safe to unpack."; \
+				return 1; \
+			fi; \
+			unzip -p "$$zip_path" "$$name.tar" > "$$tar_path.part" || { \
+				rm -f "$$tar_path.part"; \
+				echo "  MEDIA could not extract $$name.tar from $$zip_path"; \
+				return 1; }; \
+			mv "$$tar_path.part" "$$tar_path"; \
+			rm -f "$$zip_path"; \
+		fi; \
+		got=`$(SHA256SUM) -a 256 "$$tar_path" 2>/dev/null || $(SHA256SUM) "$$tar_path"`; \
+		got=`echo "$$got" | awk '{print $$1}'`; \
+		if [ "$$got" != "$$tarsha" ]; then \
+			echo "  MEDIA SHA256 MISMATCH for $$tar_path"; \
+			echo "        expected $$tarsha"; \
+			echo "        got      $$got"; \
+			echo "        the file has been left in place for inspection, and is"; \
+			echo "        NOT safe to put on a card."; \
+			return 1; \
+		fi; \
+		tar -tf "$$tar_path" >/dev/null 2>&1 || { \
+			echo "  MEDIA $$tar_path does not read back as a tar archive"; \
+			return 1; }; \
+		echo "  MEDIA $$tar_path verified ($$(wc -c < "$$tar_path" | tr -d ' ') bytes)"; \
+	}; \
+	fail=0; \
+	fetch_baseset opengfx-8.0   "$(OPENGFX_URL)" "$(OPENGFX_ZIP_SHA256)" "$(OPENGFX_TAR_SHA256)" || fail=1; \
+	fetch_baseset opensfx-1.0.3 "$(OPENSFX_URL)" "$(OPENSFX_ZIP_SHA256)" "$(OPENSFX_TAR_SHA256)" || fail=1; \
+	fetch_baseset openmsx-0.4.2 "$(OPENMSX_URL)" "$(OPENMSX_ZIP_SHA256)" "$(OPENMSX_TAR_SHA256)" || fail=1; \
+	exit $$fail
+	@printf '%s\n' \
+		"OpenTTD base sets — free replacements for the original Transport" \
+		"Tycoon Deluxe graphics, sounds and music, published by the OpenTTD" \
+		"project so the game runs without the paid original data." \
+		"" \
+		"Fetched with plain curl, verified against the SHA256 published in" \
+		"each release's own manifest.yaml on the same host (cdn.openttd.org)." \
+		"" \
+		"opengfx-8.0.tar (graphics, required to start at all)" \
+		"  Source:  $(OPENGFX_URL)" \
+		"  Licence: GNU GPL v2 (license.txt inside the tar)" \
+		"  Zip SHA256 (published, matches manifest.yaml): $(OPENGFX_ZIP_SHA256)" \
+		"  Tar SHA256 (computed from this project's own download): $(OPENGFX_TAR_SHA256)" \
+		"" \
+		"opensfx-1.0.3.tar (sound effects)" \
+		"  Source:  $(OPENSFX_URL)" \
+		"  Licence: Creative Commons Attribution-ShareAlike 3.0 Unported (license.txt inside the tar)" \
+		"  Zip SHA256 (published, matches manifest.yaml): $(OPENSFX_ZIP_SHA256)" \
+		"  Tar SHA256 (computed from this project's own download): $(OPENSFX_TAR_SHA256)" \
+		"" \
+		"openmsx-0.4.2.tar (music)" \
+		"  Source:  $(OPENMSX_URL)" \
+		"  Licence: GNU GPL v2 (license.txt inside the tar)" \
+		"  Zip SHA256 (published, matches manifest.yaml): $(OPENMSX_ZIP_SHA256)" \
+		"  Tar SHA256 (computed from this project's own download): $(OPENMSX_TAR_SHA256)" \
+		"" \
+		"Fetched: `date -u '+%Y-%m-%d %H:%M:%S UTC'`" \
+		"" \
+		"Destination on the card: games/openttd/baseset/ — flat, no" \
+		"subdirectories. OpenTTD reads a .tar directly as a base set, so" \
+		"each file is staged exactly as unpacked from its zip." \
+		"" \
+		"The original Transport Tycoon Deluxe data files are not fetched" \
+		"here. They are a commercial product and are not distributed by" \
+		"anyone; a copy is supplied by hand if you own one — see README.md." \
+		> $(MEDIA_DIR)/provenance.txt
+	@echo "  MEDIA provenance written to $(MEDIA_DIR)/provenance.txt"
+
 # The Pi 5 netboot bundle: the image the Pi 5 firmware looks for, plus the
 # boot configuration it must be served alongside. Copy the contents into the
 # TFTP root the board boots from (the Raspberry Pi firmware files themselves
@@ -163,9 +309,9 @@ netboot: rpi5
 # the three kernels and the boot configuration at the root, and everything
 # the game reads under the one directory it is given.
 #
-# The graphics, sounds and music are NOT here and are not ours to ship — see
-# the README for what to put in baseset/ and where it legitimately comes
-# from.
+# This target downloads nothing. It copies what `make media` left in
+# media/ into $(GAME_DIR)/baseset/, alongside the base set metadata and GUI
+# sprites OpenTTD's own build already generates, and names what is absent.
 CARD_DIR  = build/sd-card
 GAME_DIR  = $(CARD_DIR)/games/openttd
 card: kernels
@@ -181,9 +327,30 @@ card: kernels
 	@cp -R $(GEN_DIR)/game $(GAME_DIR)/
 	@cp host/openttd.cfg $(GAME_DIR)/
 	@echo "  STAGED $(CARD_DIR)/"
-	@echo "  The Raspberry Pi firmware files and the graphics, sound and"
-	@echo "  music sets are not staged here. Put a graphics set in"
-	@echo "  $(GAME_DIR)/baseset/ before writing the card."
+	@for f in opengfx-8.0.tar opensfx-1.0.3.tar openmsx-0.4.2.tar; do \
+		if [ -f "$(MEDIA_DIR)/$$f" ]; then \
+			cp "$(MEDIA_DIR)/$$f" $(GAME_DIR)/baseset/; \
+			echo "  DATA   $$f"; \
+		fi; \
+	done
+	@echo
+	@if [ -f $(GAME_DIR)/baseset/opengfx-8.0.tar ]; then :; else \
+		echo "  ABSENT opengfx-8.0.tar — the graphics base set. OpenTTD"; \
+		echo "         refuses to start without one; 'make media' fetches"; \
+		echo "         the free OpenGFX set."; \
+	fi
+	@if [ -f $(GAME_DIR)/baseset/opensfx-1.0.3.tar ]; then :; else \
+		echo "  ABSENT opensfx-1.0.3.tar — the sound base set. The game"; \
+		echo "         starts without it but plays no sound effects;"; \
+		echo "         'make media' fetches the free OpenSFX set."; \
+	fi
+	@if [ -f $(GAME_DIR)/baseset/openmsx-0.4.2.tar ]; then :; else \
+		echo "  ABSENT openmsx-0.4.2.tar — the music base set. The game"; \
+		echo "         starts without it but plays no music; 'make media'"; \
+		echo "         fetches the free OpenMSX set."; \
+	fi
+	@echo "  NOTE   The Raspberry Pi firmware files are not staged here either."
+	@echo "         See README.md."
 
 clean-boards:
 	@for b in $(BOARDS); do $(MAKE) -C host RAPI_BOARD=$$b clean-board; done
