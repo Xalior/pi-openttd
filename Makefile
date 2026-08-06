@@ -13,7 +13,11 @@
 #                            the base set metadata
 #   make rpi5 | rpi4 | rpi3  one board's kernel image
 #   make kernels             all three, built in parallel
-#   make verify              truth-gate: every image exists and is non-empty
+#   make regenerate          OpenTTD's generated sources from nothing
+#   make rebuild-rpi5        one board's kernel image from nothing
+#   make rebuild             all three from nothing, built in parallel
+#   make verify              truth-gate: every image exists, is non-empty and
+#                            carries the defaults block
 #   make media               download the freely redistributable base sets
 #                            into media/
 #   make netboot             stage the Pi 5 image and its boot configuration
@@ -62,10 +66,27 @@ IMAGE_rpi5 = kernel_2712.img
 GEN_DIR    = $(CURDIR)/build/gen
 GEN_STAMP  = $(GEN_DIR)/generated/table/strings.h
 
-.PHONY: deps generated kernels verify media netboot card clean-boards $(BOARDS)
-.PHONY: $(addprefix deps-,$(BOARDS))
+# One file out of each family the generation is asked for, checked after it
+# runs. CMake reports a target as built whether or not the files behind it
+# arrived, so a target that was never asked for — or a build directory whose
+# own bookkeeping says a deleted output is still current — comes back as a
+# success with nothing on disk, and the failure lands hundreds of objects
+# later as a missing include.
+GEN_EXPECTED = \
+	$(GEN_DIR)/generated/rev.cpp \
+	$(GEN_DIR)/generated/table/strings.h \
+	$(GEN_DIR)/generated/table/settings.h \
+	$(GEN_DIR)/generated/script/api/script_window.hpp \
+	$(GEN_DIR)/generated/script/api/ai/ai_includes.hpp \
+	$(GEN_DIR)/generated/script/api/game/game_includes.hpp \
+	$(GEN_DIR)/lang/english.lng \
+	$(GEN_DIR)/baseset/orig_extra.grf
+
+.PHONY: deps generated regenerate kernels rebuild verify media netboot card clean-boards $(BOARDS)
+.PHONY: $(addprefix deps-,$(BOARDS)) $(addprefix rebuild-,$(BOARDS))
 
 deps:
+	+@$(NOT_DRY_RUN)
 	$(MAKE) -C circle-libsdl2 deps
 
 # One board's dependencies: its own circle-stdlib world and the shim archive
@@ -76,6 +97,7 @@ deps:
 # to phony targets — it would quietly answer "nothing to be done" and leave
 # the world unbuilt.
 $(addprefix deps-,$(BOARDS)): deps-%:
+	+@$(NOT_DRY_RUN)
 	$(MAKE) -C circle-libsdl2 world BOARD=$*
 	$(MAKE) -C circle-libsdl2 libSDL2-$*.a BOARD=$*
 
@@ -90,8 +112,14 @@ $(addprefix deps-,$(BOARDS)): deps-%:
 #   table_strings   generated/table/strings.h, the STR_* identifiers
 #   table_settings  generated/table/settings.h, the settings table
 #   script_window   generated/script/api/script_window.hpp
-#   script_ai/game/template
-#                   the Squirrel binding headers for the three script APIs
+#   script_ai_includes, script_game_includes, script_template
+#                   the Squirrel binding headers for the three script APIs.
+#                   The _includes targets rather than the plain script_ai and
+#                   script_game: those produce the per-class .sq.hpp files
+#                   only, and each API's <api>_includes.hpp — the one header
+#                   the game's own sources include — belongs to the _includes
+#                   target, which depends on the plain one. template has no
+#                   includes header and is asked for directly.
 #   language_files  lang/*.lng, the compiled language files the game loads
 #   baseset_files   baseset/*, the metadata and the GUI sprites the game
 #                   needs before any downloaded graphics set
@@ -103,17 +131,38 @@ $(addprefix deps-,$(BOARDS)): deps-%:
 # rest never reach the cross build.
 generated: $(GEN_STAMP)
 
+# The generation from nothing. CMake keeps its own record of what it has
+# already built, in the build directory, and that record outlives the files it
+# describes: delete one generated file and CMake still reports its target as
+# built. Removing the directory is the only way to make the record and the
+# disk agree again.
+.PHONY: regenerate
+regenerate:
+	+@$(NOT_DRY_RUN)
+	rm -rf $(GEN_DIR)
+	@$(MAKE) generated
+
 $(GEN_STAMP):
 	@echo "  CMAKE openttd host-side generation -> $(GEN_DIR)"
 	@cmake -S openttd -B $(GEN_DIR) -DCMAKE_BUILD_TYPE=Release -DOPTION_DEDICATED=ON >/dev/null
 	@cmake --build $(GEN_DIR) --target \
 		find_version table_strings table_settings \
-		script_window script_ai script_game script_template \
+		script_window script_ai_includes script_game_includes script_template \
 		language_files baseset_files ai_compat_files gs_compat_files >/dev/null
-	@test -s $(GEN_STAMP) || { echo "  FAIL  generation produced no strings table"; exit 1; }
+	@fail=0; \
+	for f in $(GEN_EXPECTED); do \
+		[ -s "$$f" ] || { echo "  FAIL  generation produced no $$f"; fail=1; }; \
+	done; \
+	if [ $$fail -ne 0 ]; then \
+		echo "        The build directory's own bookkeeping can report a target"; \
+		echo "        as current while its output is gone. Remove $(GEN_DIR)"; \
+		echo "        and run this again."; \
+		exit 1; \
+	fi
 	@echo "  GEN   $(GEN_DIR)/generated, $(GEN_DIR)/lang, $(GEN_DIR)/baseset"
 
 $(BOARDS): check-toolchain generated
+	+@$(NOT_DRY_RUN)
 	$(MAKE) -C host RAPI_BOARD=$@ GEN_DIR=$(GEN_DIR)
 
 # All three at once. Each sub-make owns a different world and a different
@@ -127,13 +176,35 @@ $(BOARDS): check-toolchain generated
 # success, and the truth-gate would then pass the board's PREVIOUS image,
 # still on disk.
 kernels: check-toolchain generated
+	+@$(NOT_DRY_RUN)
 	@pids=; fail=0; \
 	for b in $(BOARDS); do $(MAKE) -C host RAPI_BOARD=$$b GEN_DIR=$(GEN_DIR) & pids="$$pids $$!"; done; \
 	for p in $$pids; do wait $$p || fail=1; done; \
 	exit $$fail
 
+# One board from nothing: the generated sources and the board's build tree are
+# both removed before the build, so nothing can be inherited from a previous
+# one. Written as a static pattern rule over the board list for the same reason
+# deps-% is.
+$(addprefix rebuild-,$(BOARDS)): rebuild-%: check-toolchain regenerate
+	+@$(NOT_DRY_RUN)
+	$(MAKE) -C host RAPI_BOARD=$* rebuild
+
+# All three from nothing, in parallel, waited for by PID exactly as kernels is.
+rebuild: check-toolchain regenerate
+	+@$(NOT_DRY_RUN)
+	@pids=; fail=0; \
+	for b in $(BOARDS); do $(MAKE) -C host RAPI_BOARD=$$b rebuild & pids="$$pids $$!"; done; \
+	for p in $$pids; do wait $$p || fail=1; done; \
+	exit $$fail
+
 # Truth-gate: ask the filesystem, not the exit codes. An image that is
-# missing or empty fails here even if the build claimed success.
+# missing, empty, or does not carry the defaults block at offset 0x800 fails
+# here even if the build claimed success.
+#
+# What this cannot tell you is whether the image was built from the sources as
+# they now stand. That is a question about the build, not about the file, and
+# `make rebuild` is the only answer to it.
 verify:
 	@fail=0; \
 	for b in $(BOARDS); do \
@@ -142,10 +213,12 @@ verify:
 			rpi4) img=host/build/rpi4/$(IMAGE_rpi4) ;; \
 			rpi5) img=host/build/rpi5/$(IMAGE_rpi5) ;; \
 		esac; \
-		if [ -s "$$img" ]; then \
-			echo "  OK    $$img ($$(wc -c < $$img | tr -d ' ') bytes)"; \
-		else \
+		if [ ! -s "$$img" ]; then \
 			echo "  FAIL  $$img missing or empty"; fail=1; \
+		elif [ "`dd if=$$img bs=4 skip=512 count=1 2>/dev/null`" != "PM8D" ]; then \
+			echo "  FAIL  $$img has no defaults block at 0x800"; fail=1; \
+		else \
+			echo "  OK    $$img ($$(wc -c < $$img | tr -d ' ') bytes, defaults block present)"; \
 		fi; \
 	done; \
 	exit $$fail
