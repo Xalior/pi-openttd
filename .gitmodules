@@ -1,0 +1,6 @@
+[submodule "openttd"]
+	path = openttd
+	url = https://github.com/OpenTTD/OpenTTD.git
+[submodule "circle-libsdl2"]
+	path = circle-libsdl2
+	url = https://github.com/Xalior/circle-libsdl2.git
