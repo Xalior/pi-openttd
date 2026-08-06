@@ -244,7 +244,17 @@ OTTD_DEFINE = -DUNIX -DPOINTER_IS_64BIT -DWITH_SDL2 -DNDEBUG
 # -fno-strict-enums is upstream's, and it is not cosmetic: OpenTTD stores
 # values outside an enum's declared range in enum-typed variables, and a
 # compiler assuming otherwise deletes the code that checks for them.
-OTTD_CXXFLAGS = -fno-strict-enums -finput-charset=utf-8 $(OTTD_DEFINE) $(CPPFLAGS)
+#
+# -include cstdlib is this port's, and it is here because of the standard
+# library rather than because of OpenTTD. The bundled {fmt} calls malloc and
+# free unqualified in its own allocator and never includes <cstdlib> for
+# them; on a desktop some other standard header has always already declared
+# them by the time that code is reached, and with the libc++ these worlds are
+# built from, none has. Forcing the header in front of every translation unit
+# is the smallest fix that leaves the vendored tree untouched, and it costs
+# nothing anywhere else.
+OTTD_CXXFLAGS = -fno-strict-enums -finput-charset=utf-8 -include cstdlib \
+	$(OTTD_DEFINE) $(CPPFLAGS)
 
 # The include path, in upstream's own order:
 #
