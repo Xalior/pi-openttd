@@ -364,27 +364,15 @@ WRAPPED_SYSCALLS = \
 	_fcntl mkdir chdir getcwd dup dup2 \
 	opendir readdir closedir rewinddir
 
-# ---------------------------------------------------------------------------
-# Two SDL functions the shim owns and this port extends
-# ---------------------------------------------------------------------------
+# circle-libsdl2 now implements SDL_CreateRGBSurface and SDL_FreeSurface for
+# paletted surfaces as well as 32-bit ones, so this port no longer needs to
+# intercept the pair the way it wraps the syscalls above — there is nothing
+# left for circle_stubs.cpp to add on top, and no --wrap for them here.
 #
-# circle-libsdl2 implements SDL_CreateRGBSurface and SDL_FreeSurface for
-# 32-bit surfaces and refuses anything else. OpenTTD's screen buffer is
-# 8-bit paletted whenever the 8bpp blitter is chosen, so this port adds that
-# case — and adding it means intercepting the pair, because a surface with a
-# palette cannot be freed by a function that knows nothing about palettes.
-#
-# --wrap for the same reason as the syscalls above: it leaves the library's
-# implementations in place and reachable as __real_*, so the wrapper in
-# circle_stubs.cpp handles the paletted case and hands every other one
-# straight back. A plain redefinition would collide with the archive, which
-# is linked whole precisely so that it does.
-WRAPPED_SDL = SDL_CreateRGBSurface SDL_FreeSurface
-
 # The link is driven by the cross ld directly (Circle's Rules.mk sets
 # LD = <prefix>ld for GCC builds), so these are plain linker options, not
 # compiler-driver -Wl, ones.
-LDFLAGS += $(addprefix --wrap=,$(WRAPPED_SYSCALLS) $(WRAPPED_SDL))
+LDFLAGS += $(addprefix --wrap=,$(WRAPPED_SYSCALLS))
 
 # ---------------------------------------------------------------------------
 # Compilation

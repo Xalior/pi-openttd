@@ -59,15 +59,20 @@ pretends to provide one. What each absence costs:
   file by starting a separate program, and there is no second process to
   start. Sound effects are unaffected and use the SDL2 backend.
 - **No network.** Circle has a network stack, but this kernel never starts
-  it, so multiplayer and the server list are unavailable. The network code is
-  still compiled, and reports that it cannot start.
+  it, so multiplayer and the server list are unavailable regardless. Right
+  now the network code does not even compile here — see below.
 - **No OpenGL.** The software blitters are the only ones built.
 
 ### What has and has not been tried
 
-The port compiles and links completely for all three boards. **It has not
-been run on hardware.** Nothing below has been observed; each is a statement
-about the code.
+**The build does not currently complete.** OpenTTD's networking source
+(`src/network/core/address.cpp`) calls `getnameinfo`/`getaddrinfo` and
+`setsockopt` with `NI_NUMERICHOST`, `AI_ADDRCONFIG` and `IPV6_V6ONLY`, none of
+which this board's C library declares. That is upstream network code hitting
+a gap in the platform underneath it, not an SDL2 problem, and it stops the
+build before link, so nothing below has been exercised even in a build,
+let alone on hardware. Nothing below has been observed; each is a statement
+about the code as it reads.
 
 - **The mouse.** OpenTTD is driven almost entirely by the mouse, and
   circle-libsdl2 implements the whole SDL mouse interface over Circle's USB
@@ -229,20 +234,19 @@ them.
     host/                this repository's own code
       kernel.cpp         brings the board up, elects the cores, starts the game
       circle_syscalls.cpp  file access, routed to the core that owns the card
-      circle_stubs.cpp   the SDL2 surface and palette layer OpenTTD needs
+      circle_stubs.cpp   empty: the place a future SDL2 gap would go
       circle_platform.cpp  the machine facilities OpenTTD expects an OS to have
       sdl2ext/           POSIX headers this board's C library does not carry
       defaults.cpp       the boot-time argument block described above
     openttd/             upstream OpenTTD, unmodified
     circle-libsdl2/      SDL2 on Circle, and the circle-stdlib worlds
 
-`host/circle_stubs.cpp` is the largest piece of the port and the most likely
-to shrink. OpenTTD's SDL2 backend uses the older window-surface model — ask
-the window for a surface, draw into it, ask for it to be shown — and
-circle-libsdl2 renders from textures. That file is the bridge between the
-two, plus the palette handling the paletted blitters need. Each function in
-it is a seam: when the SDL2 layer implements one for real, the way to adopt
-it is to delete the copy here.
+`host/circle_stubs.cpp` used to be the largest piece of the port: a bridge
+between OpenTTD's older window-surface SDL2 model and circle-libsdl2's
+texture-based one, plus the palette handling the paletted blitters need.
+circle-libsdl2 has since grown a genuine window-surface present path and
+genuine paletted-surface support, so the bridge is gone — the file is empty
+of functions and stays only as the place a future SDL2 gap would go.
 
 ## License
 
