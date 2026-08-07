@@ -59,20 +59,35 @@ pretends to provide one. What each absence costs:
   file by starting a separate program, and there is no second process to
   start. Sound effects are unaffected and use the SDL2 backend.
 - **No network.** Circle has a network stack, but this kernel never starts
-  it, so multiplayer and the server list are unavailable regardless. Right
-  now the network code does not even compile here — see below.
+  it, so multiplayer and the server list are unavailable. The network code
+  is compiled and linked, and the calls it makes into the platform report
+  that there is no network rather than pretending there is one.
 - **No OpenGL.** The software blitters are the only ones built.
 
 ### What has and has not been tried
 
-**The build does not currently complete.** OpenTTD's networking source
-(`src/network/core/address.cpp`) calls `getnameinfo`/`getaddrinfo` and
-`setsockopt` with `NI_NUMERICHOST`, `AI_ADDRCONFIG` and `IPV6_V6ONLY`, none of
-which this board's C library declares. That is upstream network code hitting
-a gap in the platform underneath it, not an SDL2 problem, and it stops the
-build before link, so nothing below has been exercised even in a build,
-let alone on hardware. Nothing below has been observed; each is a statement
-about the code as it reads.
+**The Pi 5 image builds and links.** It has not been booted. The Pi 3 and
+Pi 4 images have not been built since the change that made the Pi 5 one
+link. Nothing below has been observed; each is a statement about the code as
+it reads.
+
+Getting there meant answering, in this port's own layer, a set of things
+upstream expects an operating system to have. They are not SDL2 gaps and
+they are not upstream defects — they are places where a program written for
+a desktop Unix meets a board that has no operating system:
+
+- Five constants the C library here does not define: `NI_NUMERICHOST` and
+  `AI_ADDRCONFIG` in `<netdb.h>`, `IPV6_V6ONLY` in `<netinet/in.h>`, and
+  `SO_REUSEPORT` in `<sys/socket.h>`. They are supplied in `host/sdl2ext/`,
+  by headers that pass the C library's own through and add only what is
+  missing.
+- Nine functions the C library declares and does not build: `getuid`,
+  `getpwuid`, `flockfile`, `funlockfile`, `execvp`, `waitpid`, `sigaction`,
+  `sigprocmask` and `getnameinfo`. They are implemented in
+  `host/circle_platform.cpp`, each returning the honest answer for a machine
+  with no users, no processes and no signals. `getnameinfo` is the one that
+  does real work: it formats an address the caller already holds, which is
+  all this board can be asked for and all OpenTTD asks for.
 
 - **The mouse.** OpenTTD is driven almost entirely by the mouse, and
   circle-libsdl2 implements the whole SDL mouse interface over Circle's USB
@@ -224,25 +239,6 @@ is added to the game's own arguments, so a boot can change the resolution or
 load a saved game without rebuilding or rewriting the card. Arguments
 starting `--rapi-` are the kernel's own and are removed before the game sees
 them.
-
-## How the layers fit
-
-    host/                this repository's own code
-      kernel.cpp         brings the board up, elects the cores, starts the game
-      circle_syscalls.cpp  file access, routed to the core that owns the card
-      circle_stubs.cpp   empty: the place a future SDL2 gap would go
-      circle_platform.cpp  the machine facilities OpenTTD expects an OS to have
-      sdl2ext/           POSIX headers this board's C library does not carry
-      defaults.cpp       the boot-time argument block described above
-    openttd/             upstream OpenTTD, unmodified
-    circle-libsdl2/      SDL2 on Circle, and the circle-stdlib worlds
-
-`host/circle_stubs.cpp` used to be the largest piece of the port: a bridge
-between OpenTTD's older window-surface SDL2 model and circle-libsdl2's
-texture-based one, plus the palette handling the paletted blitters need.
-circle-libsdl2 has since grown a genuine window-surface present path and
-genuine paletted-surface support, so the bridge is gone — the file is empty
-of functions and stays only as the place a future SDL2 gap would go.
 
 ## License
 
