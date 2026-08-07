@@ -218,10 +218,6 @@ which owns the clock and the fan.
 
 ### Boot options
 
-`rapi-split=0` in `cmdline.txt` puts everything back on core 0 — the game,
-the drawing and the hardware — so the split and the single-core arrangement
-can be compared on one image.
-
 Every image also carries a 512-byte block at offset 0x800 that a boot loader
 can write a command line into before the image runs. Anything written there
 is added to the game's own arguments, so a boot can change the resolution or
