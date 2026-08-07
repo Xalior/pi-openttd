@@ -64,7 +64,15 @@ endif
 # The board's circle-stdlib world. A `make deps` that has not been run, or has
 # not finished, leaves this file absent; make would then report that it has no
 # rule to make a Config.mk, which describes the symptom and not the cause.
-WORLD = $(SHIM)/circle-stdlib-$(RAPI_BOARD)
+# WHERE THE BUILT WORLD COMES FROM.
+#
+# The default is this game's own nested shim, so a clone of this repository
+# alone builds and uses its own worlds and nothing needs setting. A parent
+# that keeps ONE set of built worlds for several games — they are gigabytes
+# each, and identical when the pin and the configuration match — points
+# CIRCLE_WORLDS at them.
+CIRCLE_WORLDS ?= $(SHIM)
+WORLD = $(CIRCLE_WORLDS)/circle-stdlib-$(RAPI_BOARD)
 ifeq ($(wildcard $(WORLD)/Config.mk),)
 $(error the $(RAPI_BOARD) circle-stdlib world is not configured ($(WORLD)/Config.mk is missing) — run 'make deps-$(RAPI_BOARD)' at the repository root)
 endif
@@ -136,6 +144,12 @@ OTTD_DIRS = . \
 #                             upstream builds when neither is available, is
 #                             kept instead and reports that HTTP is off
 #   os/unix/font_unix.cpp     Fontconfig
+#   os/unix/library_loader_unix.cpp
+#                             dlopen: there is no dynamic loader on a bare
+#                             metal board. The three LibraryLoader methods it
+#                             would define are written in circle_platform.cpp
+#                             instead, and report that a library cannot be
+#                             opened
 #   os/unix/unix_main.cpp     upstream's main(); built separately below with
 #                             its entry point renamed, because main() here
 #                             belongs to the Circle kernel
@@ -157,7 +171,8 @@ OTTD_EXCLUDE = \
 	video/allegro_v.cpp video/opengl.cpp video/sdl2_opengl_v.cpp \
 	video/win32_v.cpp \
 	network/core/http_curl.cpp network/core/http_winhttp.cpp \
-	os/unix/font_unix.cpp os/unix/unix_main.cpp \
+	os/unix/font_unix.cpp os/unix/library_loader_unix.cpp \
+	os/unix/unix_main.cpp \
 	strgen/strgen.cpp
 
 # The sweep. `.`-prefixed paths are normalised away so the exclusion list can
