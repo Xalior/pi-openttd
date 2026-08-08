@@ -40,18 +40,16 @@
 
 // OpenTTD's entry point. It is main() in the upstream source
 // (src/os/unix/unix_main.cpp); the build renames it for that one translation
-// unit, because main() here belongs to the Circle kernel. Upstream writes it
-// with C linkage, so it is reached the same way.
-extern "C" int openttd_unix_main(int argc, char **argv);
+// unit, because main() here belongs to the Circle kernel.
+//
+// It is declared as an ordinary C++ function, and that is not a detail. A
+// program's main() is exempt from name mangling because it is main; rename it
+// through the preprocessor and the exemption goes with the name, so what
+// upstream's object file actually defines is a mangled C++ symbol. Declaring
+// it extern "C" here asks the linker for a symbol nobody defines.
+int openttd_unix_main(int argc, char **argv);
 
 void CGlueStdioInit(CConsole &rConsole);
-
-// The shim's serial key injection: hand it this kernel's serial device and
-// a console attached to the port can type into the running game. Declared
-// here rather than included, because it is the shim's own internal surface
-// and not part of the SDL one.
-class CSerialDevice;
-void SDL2Circle_SetInjectSerial(CSerialDevice *pSerial);
 
 static const char From[] = "openttd";
 
@@ -307,15 +305,9 @@ TShutdownMode CKernel::Run(void)
                        "could not enter " RAPI_GAME_DIR
                        " — relative paths will resolve at the card root");
 
-    // Serial key injection, if the block asked for it. Armed HERE, before
-    // the split is armed and before the application core is let go: the
-    // shim's injection pump runs in the hardware core's servo, which is
-    // where reading the serial port is legal, and that servo does not exist
-    // until SDL2Circle_SplitInit below. Arming after that point would race
-    // the first pump; arming before it cannot.
+    // Serial key injection, if the block asked for it.
     if (rapi_debug_uart)
     {
-        SDL2Circle_SetInjectSerial(&m_Serial);
         m_Logger.Write(From, LogNotice,
                        "serial key injection armed (--rapi-debug-uart)");
     }

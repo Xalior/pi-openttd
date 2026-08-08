@@ -8,16 +8,30 @@
 // honest answer — no interfaces, no shared libraries — rather than a
 // plausible one.
 //
-// The declarations they satisfy come from two places: this port's own
-// headers in sdl2ext/, for the POSIX calls newlib's Circle port does not
-// carry, and upstream's own library_loader.h, whose three private methods
-// upstream implements once per platform. Excluding upstream's Unix
-// implementation and writing this one is the whole of the change; the
-// header, and every caller of it, is untouched.
+// The declarations they satisfy come from three places:
+//
+//   * this port's own headers in sdl2ext/, for the POSIX calls newlib's
+//     Circle port has no header for at all;
+//   * newlib's own headers, for the calls it declares and then does not
+//     build — its <unistd.h>, <pwd.h>, <signal.h>, <sys/wait.h>, <stdio.h>
+//     and <netdb.h> all promise functions that are in no library shipped
+//     with it, and the link is where that promise comes due;
+//   * upstream's own library_loader.h, whose three private methods upstream
+//     implements once per platform. Excluding upstream's Unix implementation
+//     and writing this one is the whole of the change; the header, and every
+//     caller of it, is untouched.
 //
 #include <sys/ioctl.h>
 #include <sys/utsname.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
 #include <ifaddrs.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <pwd.h>
+#include <signal.h>
+#include <unistd.h>
 
 #include <cerrno>
 #include <cstdio>
@@ -117,6 +131,200 @@ int uname(struct utsname *buf)
     // three images.
     snprintf(buf->version, _UTSNAME_LENGTH, "bare metal, Raspberry Pi %d",
              (int)RASPPI);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// getuid, getpwuid
+// ---------------------------------------------------------------------------
+//
+// OpenTTD asks who is running it in one place: it looks for the user's home
+// directory to keep saved games and configuration in, and falls back to
+// $HOME's absence by asking the password database.
+//
+// There is no password database here and there are no users — the game owns
+// the machine — so the answer is user 0 and no database entry. OpenTTD reads
+// that as "no home directory", which is true, and uses the directory the
+// kernel already put it in (RAPI_GAME_DIR) instead.
+uid_t getuid(void)
+{
+    return 0;
+}
+
+struct passwd *getpwuid(uid_t uid)
+{
+    (void)uid;
+    errno = ENOENT;
+    return nullptr;     // no password database on this board
+}
+
+// ---------------------------------------------------------------------------
+// flockfile, funlockfile
+// ---------------------------------------------------------------------------
+//
+// The bundled {fmt} brackets a run of character writes with these so that
+// another thread printing at the same moment cannot interleave with it.
+// newlib declares the pair in <stdio.h> and this build of it defines
+// neither, and its FILE has no lock for them to take: a stream here is
+// written straight through.
+//
+// So they do nothing, and doing nothing is the whole of what they can do.
+// The bracket keeps its meaning for the code that writes it, and a caller
+// that expected the writes to be indivisible does not get that guarantee —
+// on this board it was never on offer.
+void flockfile(FILE *file)
+{
+    (void)file;
+}
+
+void funlockfile(FILE *file)
+{
+    (void)file;
+}
+
+// ---------------------------------------------------------------------------
+// execvp, waitpid
+// ---------------------------------------------------------------------------
+//
+// Two places in OpenTTD start another program: the external-player music
+// backend hands a MIDI file to whatever the player is set to, and "open in
+// browser" hands a URL to the desktop. Both then wait for the child.
+//
+// There are no processes on this board — there is one program and it is this
+// one — so neither can be done, and both say so rather than reporting a
+// child that was never started. execvp does not return at all when it
+// succeeds, so its only possible return is this failure.
+int execvp(const char *file, char *const argv[])
+{
+    (void)file;
+    (void)argv;
+    errno = ENOSYS;
+    return -1;
+}
+
+pid_t waitpid(pid_t pid, int *status, int options)
+{
+    (void)pid;
+    (void)options;
+    if (status != nullptr) *status = 0;
+    errno = ECHILD;     // nothing was ever started, so there is nothing to wait for
+    return -1;
+}
+
+// ---------------------------------------------------------------------------
+// sigaction, sigprocmask
+// ---------------------------------------------------------------------------
+//
+// OpenTTD's crash handler installs handlers for the fatal signals and
+// unblocks them again while it writes the report. Circle raises no signals:
+// a fault on this board is a Circle exception handler and a halt, and no
+// POSIX handler is ever reached.
+//
+// Both therefore refuse, which is what a caller needs to know. OpenTTD
+// ignores the return in both places, and the code that would have run in a
+// handler is unreachable rather than silently disarmed — nothing pretends a
+// handler is installed.
+int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact)
+{
+    (void)signum;
+    (void)act;
+    if (oldact != nullptr) memset(oldact, 0, sizeof(*oldact));
+    errno = ENOSYS;
+    return -1;
+}
+
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset)
+{
+    (void)how;
+    (void)set;
+    if (oldset != nullptr) memset(oldset, 0, sizeof(*oldset));
+    errno = ENOSYS;
+    return -1;
+}
+
+// ---------------------------------------------------------------------------
+// getnameinfo
+// ---------------------------------------------------------------------------
+//
+// newlib's Circle port declares getnameinfo in <netdb.h> and ships no
+// implementation of it. OpenTTD calls it in exactly one place, to turn a
+// socket address it already holds into the string it shows and logs, and it
+// asks for the numeric form.
+//
+// That is a formatting job, not a lookup: the address is in the structure
+// the caller passed in, and this fills in the text. There is no resolver on
+// this board and no name to find, so the numeric form is not merely what was
+// asked for — it is the only answer there is, and a request for a name gets
+// the number too rather than an error.
+//
+// The node buffer is ALWAYS left holding a NUL-terminated string, on every
+// path including the failing ones. OpenTTD's caller does not check the
+// return value: it declares a buffer on the stack, calls this, and builds a
+// std::string from it. A failure that left the buffer alone would be read as
+// whatever was on the stack.
+static void FormatIPv4(char *node, socklen_t nodelen, const struct in_addr *addr)
+{
+    const unsigned char *b = (const unsigned char *)&addr->s_addr;
+    snprintf(node, nodelen, "%u.%u.%u.%u",
+             (unsigned)b[0], (unsigned)b[1], (unsigned)b[2], (unsigned)b[3]);
+}
+
+// Written out in full, group by group, rather than in the shortened form
+// RFC 5952 prefers. Nothing here parses the result back, and the long form
+// is unambiguous.
+static void FormatIPv6(char *node, socklen_t nodelen, const struct in6_addr *addr)
+{
+    const unsigned char *b = addr->s6_addr;
+    snprintf(node, nodelen,
+             "%x:%x:%x:%x:%x:%x:%x:%x",
+             (b[0]  << 8) | b[1],  (b[2]  << 8) | b[3],
+             (b[4]  << 8) | b[5],  (b[6]  << 8) | b[7],
+             (b[8]  << 8) | b[9],  (b[10] << 8) | b[11],
+             (b[12] << 8) | b[13], (b[14] << 8) | b[15]);
+}
+
+int getnameinfo(const struct sockaddr *sa, socklen_t salen,
+                char *node, socklen_t nodelen,
+                char *service, socklen_t servicelen,
+                int flags)
+{
+    (void)flags;        // the answer is numeric whatever is asked for
+
+    if (node != nullptr && nodelen > 0) node[0] = '\0';
+    if (service != nullptr && servicelen > 0) service[0] = '\0';
+
+    if (sa == nullptr) return EAI_FAMILY;
+
+    unsigned short port = 0;
+
+    switch (sa->sa_family)
+    {
+    case AF_INET:
+    {
+        if (salen < (socklen_t)sizeof(struct sockaddr_in)) return EAI_FAMILY;
+        const struct sockaddr_in *in = (const struct sockaddr_in *)sa;
+        if (node != nullptr && nodelen > 0) FormatIPv4(node, nodelen, &in->sin_addr);
+        port = ntohs(in->sin_port);
+        break;
+    }
+
+    case AF_INET6:
+    {
+        if (salen < (socklen_t)sizeof(struct sockaddr_in6)) return EAI_FAMILY;
+        const struct sockaddr_in6 *in6 = (const struct sockaddr_in6 *)sa;
+        if (node != nullptr && nodelen > 0) FormatIPv6(node, nodelen, &in6->sin6_addr);
+        port = ntohs(in6->sin6_port);
+        break;
+    }
+
+    default:
+        return EAI_FAMILY;
+    }
+
+    if (service != nullptr && servicelen > 0)
+    {
+        snprintf(service, servicelen, "%u", (unsigned)port);
+    }
     return 0;
 }
 
