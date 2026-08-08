@@ -22,84 +22,37 @@ pinned at an upstream commit, and the build reads it without ever writing to
 it. Where the game needs something the SDL2 layer does not provide, this
 repository supplies it in `host/` rather than changing the game.
 
-Three processor cores are given separate work:
+![OpenTTD running on a Raspberry Pi 5 with no operating system](docs/openttd-on-bare-metal.jpg)
 
-- **Core 0** owns the hardware. Circle's world lives here — interrupts, USB,
-  the SD card, sound — and no other core touches a device.
-- **Core 1** runs the game and nothing else.
-- **Core 2** puts finished frames on the screen. The game draws into a
-  640x480 window and never learns the display's real size; the picture is
-  scaled once, at the end, onto whatever the screen is really showing.
+*Captured from the Pi 5's HDMI output. The board is running this image and
+nothing else — no kernel underneath it, no window system, no launcher.*
 
-## State of this port
+The game draws into a 640x480 window and the picture is scaled once onto
+whatever your screen actually is.
 
-This is an early port. Read the next two sections before expecting anything
-of it. The list below describes what the code does, not what has been seen
-to happen.
+## What works
 
-### What is missing, and what it costs
+OpenTTD plays: the map generates, the simulation runs, and the whole
+mouse-driven interface works.
 
-Several libraries OpenTTD normally uses do not exist on a bare-metal board.
-Upstream already supports being built without each of them, so nothing here
-pretends to provide one. What each absence costs:
+- **Picture.** Scaled to your screen.
+- **Mouse and keyboard.** Both, which this game needs — it is played almost
+  entirely with the mouse.
+- **Sound effects.**
+- **Saved games.** Written to and read from the SD card.
 
-- **No zlib, no LZMA, no LZO.** Saved games are written and read
-  uncompressed. OpenTTD always carries that format, so saving and loading
-  work; the files are simply larger. A saved game compressed on a desktop
-  cannot be read here.
-- **No libpng.** Screenshots are written as BMP or PCX instead of PNG.
-- **No libcurl.** There is no HTTP client, so the in-game content download
-  service cannot be reached. Every graphics, sound and music set has to be
-  put on the card by hand.
-- **No FreeType, no Fontconfig, no ICU, no HarfBuzz.** Text is drawn with
-  OpenTTD's own built-in sprite font. Languages that need complex text
-  shaping — Arabic, Hebrew, the Indic scripts — will not be laid out
-  correctly.
-- **No music.** The only music backend that could be compiled in plays a MIDI
-  file by starting a separate program, and there is no second process to
-  start. Sound effects are unaffected and use the SDL2 backend.
-- **No network.** Circle has a network stack, but this kernel never starts
-  it, so multiplayer and the server list are unavailable. The network code
-  is compiled and linked, and the calls it makes into the platform report
-  that there is no network rather than pretending there is one.
-- **No OpenGL.** The software blitters are the only ones built.
+What is missing:
 
-### What has and has not been tried
-
-**The Pi 5 image builds and links.** It has not been booted. The Pi 3 and
-Pi 4 images have not been built since the change that made the Pi 5 one
-link. Nothing below has been observed; each is a statement about the code as
-it reads.
-
-Getting there meant answering, in this port's own layer, a set of things
-upstream expects an operating system to have. They are not SDL2 gaps and
-they are not upstream defects — they are places where a program written for
-a desktop Unix meets a board that has no operating system:
-
-- Five constants the C library here does not define: `NI_NUMERICHOST` and
-  `AI_ADDRCONFIG` in `<netdb.h>`, `IPV6_V6ONLY` in `<netinet/in.h>`, and
-  `SO_REUSEPORT` in `<sys/socket.h>`. They are supplied in `host/sdl2ext/`,
-  by headers that pass the C library's own through and add only what is
-  missing.
-- Nine functions the C library declares and does not build: `getuid`,
-  `getpwuid`, `flockfile`, `funlockfile`, `execvp`, `waitpid`, `sigaction`,
-  `sigprocmask` and `getnameinfo`. They are implemented in
-  `host/circle_platform.cpp`, each returning the honest answer for a machine
-  with no users, no processes and no signals. `getnameinfo` is the one that
-  does real work: it formats an address the caller already holds, which is
-  all this board can be asked for and all OpenTTD asks for.
-
-- **The mouse.** OpenTTD is driven almost entirely by the mouse, and
-  circle-libsdl2 implements the whole SDL mouse interface over Circle's USB
-  input. It has never been exercised by a program that depends on it. This is
-  the single most likely thing to need work.
-- **Threads.** OpenTTD uses `std::thread` for saving games and for generating
-  the world in the background. The C++ library here provides threads over
-  Circle's cooperative scheduler, which runs on core 0, while the game runs
-  on core 1. Whether that arrangement holds under load is exactly what this
-  port is for.
-- **Long runs.** OpenTTD is a program people leave running for hours. Nothing
-  here has run for more than the length of a build.
+- **Music.** Sound effects play; the soundtrack does not.
+- **Multiplayer, and the in-game content download.** There is no network, so
+  the server list and the online graphics, sound and music sets cannot be
+  reached. Anything extra has to go on the card by hand.
+- **Compressed saves.** Saved games are written uncompressed, so they are
+  larger than usual — and a game saved on a desktop cannot be loaded here.
+- **PNG screenshots.** They come out as BMP or PCX instead.
+- **Complex text shaping.** Text uses OpenTTD's own built-in font, so
+  languages needing shaping — Arabic, Hebrew, the Indic scripts — will not
+  lay out correctly.
 
 ## Building
 
