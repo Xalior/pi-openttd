@@ -107,8 +107,6 @@ HOST_OBJS = $(addprefix $(OBJDIR)/,$(HOST_SRCS:.cpp=.o))
 # because that is where the shared pieces are today, and it is compiled
 # straight into this kernel — there is no library to link, and no other port
 # has to agree with this one about how it is built.
-DISKCACHE_DIR = $(SHIM)/circle-diskcache
-DISKCACHE_OBJ = $(OBJDIR)/diskcache.o
 
 # ---------------------------------------------------------------------------
 # Sources — OpenTTD's
@@ -211,7 +209,7 @@ OTTD_OBJS := $(OTTD_OBJS:.cc=.o)
 # generation is headers, reached through the include path below.
 GEN_OBJS = $(OBJDIR)/ottd/generated/rev.o
 
-OBJS = $(HOST_OBJS) $(DISKCACHE_OBJ) $(OTTD_OBJS) $(GEN_OBJS)
+OBJS = $(HOST_OBJS) $(OTTD_OBJS) $(GEN_OBJS)
 
 # C++23, not the C++20 OpenTTD's own build system asks for.
 #
@@ -259,6 +257,13 @@ DEPFLAGS   = -MD -MP
 # there is only ever one recipe for the image.
 SDL_APP_IMAGE := $(TARGET)
 TARGET := $(OBJDIR)/.circle-unused
+# The SD card's read cache. On the line before Rules.mk because that is
+# where its own makefile fragment says to put it: Rules.mk works out its
+# dependency list from OBJS as it reads it, so a source added afterwards is
+# one make never checks. The fragment finds its own directory and adds the
+# object, the include path and the build rules itself.
+include $(SHIM)/circle-diskcache/diskcache.mk
+
 include $(CIRCLEHOME)/Rules.mk
 TARGET := $(SDL_APP_IMAGE)
 
@@ -346,7 +351,6 @@ OTTD_CXXFLAGS = -fno-strict-enums -finput-charset=utf-8 -include cstdlib \
 #                       source, one pair per script API
 INCLUDE := -I $(CURDIR)/sdl2ext \
 	-I $(SHIM)/include -I $(SHIM)/include/SDL2 \
-	-I $(DISKCACHE_DIR) \
 	-I $(OTTD)/src/3rdparty/squirrel/include \
 	-I $(GEN_DIR)/generated \
 	-I $(GEN_DIR)/generated/script -I $(GEN_DIR)/generated/script/api \
@@ -425,13 +429,6 @@ LDFLAGS += $(addprefix --wrap=,$(WRAPPED_SYSCALLS))
 $(OBJDIR)/%.o: %.cpp | $(OBJDIR)
 	@echo "  CPP   $@"
 	@$(CPP) $(CPPFLAGS) $(OTTD_DEFINE) $(DEPFLAGS) -c -o $@ $<
-
-# The disk cache, which lives outside this directory. Its own rule because
-# the pattern rule above only reaches sources beside this makefile, and its
-# object goes in this board's tree like every other.
-$(DISKCACHE_OBJ): $(DISKCACHE_DIR)/diskcache.cpp | $(OBJDIR)
-	@echo "  CPP   $@"
-	@$(CPP) $(CPPFLAGS) $(DEPFLAGS) -c -o $@ $<
 
 # OpenTTD's objects, mirroring its source tree under $(OBJDIR)/ottd/. The
 # source tree itself is the upstream submodule, and is never written to.

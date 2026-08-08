@@ -328,7 +328,7 @@ TShutdownMode CKernel::Run(void)
     // --rapi-cache has had its say. Before the game runs, so the one
     // allocation it ever makes happens while the heap is still empty, and
     // every read the game makes meets a cache that is already there.
-    m_DiskCache.Configure(rapi_cache_kb);
+    m_DiskCache.Configure(rapi_cache_kb, rapi_cache_readahead_kb);
 
     // Serial key injection, if the block asked for it.
     if (rapi_debug_uart)
